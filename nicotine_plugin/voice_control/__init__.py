@@ -51,7 +51,7 @@ class Plugin(BasePlugin):
 
         for _code, filename, size, _ext, attrs in msg.list:
             self._collected_results.append({
-                "user": msg.search_username,
+                "user": msg.username,
                 "filename": filename,
                 "size": size,
                 "bitrate": attrs.get(FileAttribute.BITRATE) if attrs else None,
