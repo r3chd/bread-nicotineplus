@@ -35,7 +35,7 @@ This is the same mechanism the GTK UI itself uses internally to populate its sea
 
 Two long-lived local processes, connected over a Unix domain socket:
 
-```
+```text
 Nicotine+ (GTK app)                          Voice Controller (separate process)
 ┌──────────────────────────┐                 ┌─────────────────────────────────┐
 │ voice_control plugin      │                 │ Whisper (STT) -> Claude (tools)  │
@@ -58,6 +58,7 @@ The plugin runs **inside** Nicotine+'s process and is the only thing that talks 
 Path: `~/.config/nicotine/plugins/voice_control/__init__.py` + `PLUGININFO` (standard Nicotine+ user-plugin layout).
 
 A `BasePlugin` subclass. On `init()`:
+
 - Starts a background thread running a Unix domain socket server at `control.sock`, accepting line-delimited JSON.
 - Hooks `events.connect("file-search-response", ...)` to collect incoming results per search token into an in-memory buffer, keyed by token, for a fixed collection window (default 5s, configurable via plugin settings).
 - Calls `core.downloads.enqueue_download(...)` directly to start downloads.
@@ -67,7 +68,7 @@ A `BasePlugin` subclass. On `init()`:
 **Socket protocol** — one JSON object per line, in and out:
 
 | Request | Response |
-|---|---|
+| --- | --- |
 | `{"action": "search", "query": "<text>"}` | `{"results": [{"index": 1, "filename": ..., "user": ..., "size": ..., "format": ..., "bitrate": ..., "speed": ...}, ...]}` |
 | `{"action": "download", "index": <n>}` | `{"status": "queued", "filename": ...}` or `{"error": ...}` |
 | `{"action": "download", "match": "<text>"}` | same as above |
