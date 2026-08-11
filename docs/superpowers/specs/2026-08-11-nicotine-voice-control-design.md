@@ -57,6 +57,8 @@ The plugin runs **inside** Nicotine+'s process and is the only thing that talks 
 
 Path: `~/.local/share/nicotine/plugins/voice_control/__init__.py` + `PLUGININFO` (standard Nicotine+ user-plugin layout, under the XDG data folder — see Environment section above).
 
+Real source lives in this repo at `nicotine_plugin/voice_control/`, version-controlled like everything else. `~/.local/share/nicotine/plugins/voice_control` is a **symlink** to that repo directory — Nicotine+ loads the plugin by following the symlink, edits happen in the repo.
+
 A `BasePlugin` subclass. On `init()`:
 
 - Starts a background thread running a Unix domain socket server at `control.sock`, accepting line-delimited JSON.
