@@ -8,8 +8,8 @@ A voice-controlled interface for Nicotine+ (the Soulseek client): "search for Bl
 
 - Nicotine+ **3.3.10**, installed as a macOS app bundle at `/Applications/Nicotine+.app`.
 - The installed app ships only compiled `.pyc` files under `Contents/Resources/lib/pynicotine` — no `.py` source. The plugin API below was verified against the actual `nicotine-plus/nicotine-plus` GitHub source at tag `3.3.10` (matching the installed version exactly), not against training-data assumptions.
-- No existing user plugins: `~/.config/nicotine/plugins` does not exist yet. Nothing to overwrite.
-- User's Nicotine+ data dir: `~/.config/nicotine/`.
+- No existing user plugins: `~/.local/share/nicotine/plugins` does not exist yet. Nothing to overwrite.
+- Nicotine+ splits config and data per XDG: config file lives in `~/.config/nicotine/config`; user plugins live under the **data** folder, `~/.local/share/nicotine/plugins/` (from `pynicotine/config.py Config.get_user_folders()`: `data_folder_path = XDG_DATA_HOME/nicotine`, defaulting to `~/.local/share/nicotine`, and `pluginsystem.py` sets `self.user_plugin_folder = os.path.join(config.data_folder_path, "plugins")`). No legacy `~/.nicotine` directory exists on this machine, so the XDG paths apply, not the legacy single-folder layout.
 
 ## Verified plugin API (source-grounded)
 
@@ -49,13 +49,13 @@ Nicotine+ (GTK app)                          Voice Controller (separate process)
 
 The plugin runs **inside** Nicotine+'s process and is the only thing that talks to `core.search` / `core.downloads`. The controller is a fully separate process with no Nicotine+ imports — it only ever speaks JSON over the socket. A crash or bug in the voice/LLM stack cannot touch the running Soulseek client.
 
-**Transport**: Unix domain socket at `~/.config/nicotine/plugins/voice_control/control.sock`. Chosen over TCP-on-localhost: no port to collide with, filesystem permissions restrict access to the local user, simple to clean up on plugin unload.
+**Transport**: Unix domain socket at `~/.local/share/nicotine/plugins/voice_control/control.sock`. Chosen over TCP-on-localhost: no port to collide with, filesystem permissions restrict access to the local user, simple to clean up on plugin unload.
 
 ## Components
 
 ### 1. Plugin
 
-Path: `~/.config/nicotine/plugins/voice_control/__init__.py` + `PLUGININFO` (standard Nicotine+ user-plugin layout).
+Path: `~/.local/share/nicotine/plugins/voice_control/__init__.py` + `PLUGININFO` (standard Nicotine+ user-plugin layout, under the XDG data folder — see Environment section above).
 
 A `BasePlugin` subclass. On `init()`:
 
@@ -120,4 +120,4 @@ Out of scope for v1: wake word detection, full OS control, vision-based fallback
 
 - Python for both plugin and controller.
 - Use Nicotine+'s own internal functions/events, not UI scraping or click simulation.
-- Ask before modifying the user's existing Nicotine+ config/plugins directory (moot for now — it doesn't exist yet, so creating `voice_control/` under it is additive, not destructive; still confirm before any future change that touches existing user data).
+- Ask before modifying the user's existing Nicotine+ config or data directories. `~/.local/share/nicotine/plugins/` (where the plugin must live) doesn't exist yet, so creating it and `voice_control/` under it is additive, not destructive — still confirm with the user before creating it, since it's outside the project repo and lives in Nicotine+'s live data folder.
