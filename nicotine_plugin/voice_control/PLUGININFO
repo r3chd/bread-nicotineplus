@@ -1,0 +1,4 @@
+Version = "2026-08-12r00"
+Authors = ["r3chd"]
+Name = "Voice Control"
+Description = "Backend for voice-controlled Soulseek search and download. Step 1: triggers a search via /vcsearch <query> and logs collected results."
