@@ -56,6 +56,7 @@ class Plugin(BasePlugin):
         self._collected_results = []
         self._last_results = []
         self._control_socket = None
+        self._search_lock = threading.Lock()
 
     def init(self):
         events.connect("file-search-response", self._file_search_response)
@@ -96,6 +97,10 @@ class Plugin(BasePlugin):
 
         if not query:
             self.output("Usage: /vcsearch <query>")
+            return False
+
+        if not self._search_lock.acquire(blocking=False):
+            self.output("vcsearch: a search is already in progress, try again shortly")
             return False
 
         self._collected_results = []
@@ -144,6 +149,7 @@ class Plugin(BasePlugin):
         finally:
             self._active_token = None
             self._collected_results = []
+            self._search_lock.release()
 
     def _start_search(self, query):
         self._collected_results = []
@@ -161,30 +167,36 @@ class Plugin(BasePlugin):
         if not query:
             return {"error": "empty_query"}
 
-        token = self._run_on_main_thread(self._start_search, query)
-        self.log(f"vcsearch (socket): searching for '{_sanitize_for_log(query)}' (token {token})")
+        if not self._search_lock.acquire(blocking=False):
+            return {"error": "search_in_progress"}
 
-        time.sleep(SEARCH_COLLECTION_SECONDS)
+        try:
+            token = self._run_on_main_thread(self._start_search, query)
+            self.log(f"vcsearch (socket): searching for '{_sanitize_for_log(query)}' (token {token})")
 
-        results = self._run_on_main_thread(self._finish_search)
-        ranked = sorted(results, key=_rank_key)[:MAX_RETURNED_RESULTS]
+            time.sleep(SEARCH_COLLECTION_SECONDS)
 
-        self._last_results = [
-            {
-                "index": position,
-                "filename": result["filename"],
-                "user": result["user"],
-                "size": result["size"],
-                "format": _file_format(result["filename"]),
-                "bitrate": result["bitrate"],
-                "speed": result["speed"],
-            }
-            for position, result in enumerate(ranked, start=1)
-        ]
+            results = self._run_on_main_thread(self._finish_search)
+            ranked = sorted(results, key=_rank_key)[:MAX_RETURNED_RESULTS]
 
-        self.log(f"vcsearch (socket): token {token} returning {len(self._last_results)} result(s)")
+            self._last_results = [
+                {
+                    "index": position,
+                    "filename": result["filename"],
+                    "user": result["user"],
+                    "size": result["size"],
+                    "format": _file_format(result["filename"]),
+                    "bitrate": result["bitrate"],
+                    "speed": result["speed"],
+                }
+                for position, result in enumerate(ranked, start=1)
+            ]
 
-        return {"results": self._last_results}
+            self.log(f"vcsearch (socket): token {token} returning {len(self._last_results)} result(s)")
+
+            return {"results": self._last_results}
+        finally:
+            self._search_lock.release()
 
     def _handle_request(self, request):
         try:
