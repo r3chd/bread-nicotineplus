@@ -57,9 +57,11 @@ class _Server(socketserver.UnixStreamServer):
             self._active_connection = None
 
     def close_active_connection(self):
-        if self._active_connection is not None:
+        connection = self._active_connection
+
+        if connection is not None:
             try:
-                self._active_connection.shutdown(socket.SHUT_RDWR)
+                connection.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
 

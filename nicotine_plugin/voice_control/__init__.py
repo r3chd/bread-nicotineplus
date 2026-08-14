@@ -75,9 +75,13 @@ class Plugin(BasePlugin):
 
     def _run_on_main_thread(self, func, *args, **kwargs):
         done = threading.Event()
+        cancelled = threading.Event()
         result_box = {}
 
         def _call():
+            if cancelled.is_set():
+                return
+
             try:
                 result_box["value"] = func(*args, **kwargs)
             except Exception as error:
@@ -88,6 +92,7 @@ class Plugin(BasePlugin):
         events.invoke_main_thread(_call)
 
         if not done.wait(timeout=MAIN_THREAD_CALL_TIMEOUT):
+            cancelled.set()
             raise TimeoutError("main-thread call did not complete")
 
         if "error" in result_box:
