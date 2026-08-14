@@ -103,15 +103,21 @@ class Plugin(BasePlugin):
             self.output("vcsearch: a search is already in progress, try again shortly")
             return False
 
-        self._collected_results = []
-        self.core.search.do_search(query, "global")
-        self._active_token = self.core.search.token
+        try:
+            self._collected_results = []
+            self.core.search.do_search(query, "global")
+            self._active_token = self.core.search.token
 
-        self.log(f"vcsearch: searching for '{query}' (token {self._active_token})")
+            self.log(f"vcsearch: searching for '{query}' (token {self._active_token})")
 
-        events.schedule(delay=SEARCH_COLLECTION_SECONDS, callback=self._log_collected_results)
+            events.schedule(delay=SEARCH_COLLECTION_SECONDS, callback=self._log_collected_results)
 
-        return True
+            return True
+        except Exception:
+            self._active_token = None
+            self._collected_results = []
+            self._search_lock.release()
+            raise
 
     def _file_search_response(self, msg):
         if msg.token != self._active_token:
