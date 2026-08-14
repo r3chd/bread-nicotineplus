@@ -77,6 +77,8 @@ A `BasePlugin` subclass. On `init()`:
 | `{"action": "download", "match": "<text>"}` | same as above |
 | `{"action": "list_results"}` | same shape as `search` response, replayed from last search |
 
+`search` can also return `{"error": "empty_query"}` (blank/whitespace-only query) or `{"error": "search_in_progress"}` (a search from either the socket or the `/vcsearch` chat command is already in flight — searches are serialized, not queued). `download` can also return `{"error": "no_active_results"}`, `{"error": "index_out_of_range"}`, `{"error": "ambiguous_match"}` (covers both zero and multiple substring matches), `{"error": "missing_index_or_match"}`, or `{"error": "download_failed"}`. If a `download` request supplies both `index` and `match`, `index` takes precedence and `match` is ignored.
+
 **Result ranking** (composite score, highest first): (1) has a free upload slot, (2) higher bitrate / lossless format, (3) higher user upload speed, (4) shorter queue length. Top 10 returned by default.
 
 **Download resolution**: `index` is 1-based into the last returned result list. `match` is a case-insensitive substring match against filenames in the last result list; zero or multiple matches returns `{"error": "..."}` rather than guessing.

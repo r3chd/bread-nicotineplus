@@ -10,6 +10,7 @@ from pynicotine.slskmessages import FileAttribute
 SEARCH_COLLECTION_SECONDS = 5
 MAX_LOGGED_RESULTS = 10
 MAX_RETURNED_RESULTS = 10
+MAIN_THREAD_CALL_TIMEOUT = 10
 LOSSLESS_FORMATS = frozenset({"flac", "wav", "ape", "wv"})
 
 
@@ -85,7 +86,9 @@ class Plugin(BasePlugin):
                 done.set()
 
         events.invoke_main_thread(_call)
-        done.wait()
+
+        if not done.wait(timeout=MAIN_THREAD_CALL_TIMEOUT):
+            raise TimeoutError("main-thread call did not complete")
 
         if "error" in result_box:
             raise result_box["error"]
@@ -104,11 +107,9 @@ class Plugin(BasePlugin):
             return False
 
         try:
-            self._collected_results = []
-            self.core.search.do_search(query, "global")
-            self._active_token = self.core.search.token
+            token = self._start_search(query)
 
-            self.log(f"vcsearch: searching for '{query}' (token {self._active_token})")
+            self.log(f"vcsearch: searching for '{_sanitize_for_log(query)}' (token {token})")
 
             events.schedule(delay=SEARCH_COLLECTION_SECONDS, callback=self._log_collected_results)
 
@@ -201,6 +202,10 @@ class Plugin(BasePlugin):
             self.log(f"vcsearch (socket): token {token} returning {len(self._last_results)} result(s)")
 
             return {"results": self._last_results}
+        except Exception:
+            self._active_token = None
+            self._collected_results = []
+            raise
         finally:
             self._search_lock.release()
 
@@ -256,12 +261,15 @@ class Plugin(BasePlugin):
             self.log(f"vcsearch (socket): download failed: {error!r}")
             return {"error": "download_failed"}
 
-        self.log(
-            "vcsearch (socket): queued download from {user}: {filename}".format(
-                user=_sanitize_for_log(target["user"]),
-                filename=_sanitize_for_log(target["filename"]),
+        try:
+            self.log(
+                "vcsearch (socket): queued download from {user}: {filename}".format(
+                    user=_sanitize_for_log(target["user"]),
+                    filename=_sanitize_for_log(target["filename"]),
+                )
             )
-        )
+        except Exception:
+            pass
 
         return {"status": "queued", "filename": target["filename"]}
 
