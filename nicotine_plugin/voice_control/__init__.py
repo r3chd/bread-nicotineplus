@@ -204,6 +204,67 @@ class Plugin(BasePlugin):
         finally:
             self._search_lock.release()
 
+    def _resolve_download_target(self, request):
+        if "index" in request:
+            index = request["index"]
+
+            for result in self._last_results:
+                if result["index"] == index:
+                    return result
+
+            return None
+
+        if "match" in request:
+            needle = request["match"].strip().lower()
+            matches = [
+                result for result in self._last_results
+                if needle in result["filename"].lower()
+            ]
+
+            if len(matches) != 1:
+                return None
+
+            return matches[0]
+
+        return None
+
+    def _download_error_reason(self, request):
+        if not self._last_results:
+            return "no_active_results"
+
+        if "index" in request:
+            return "index_out_of_range"
+
+        if "match" in request:
+            return "ambiguous_match"
+
+        return "missing_index_or_match"
+
+    def _handle_download(self, request):
+        target = self._resolve_download_target(request)
+
+        if target is None:
+            return {"error": self._download_error_reason(request)}
+
+        try:
+            self._run_on_main_thread(
+                self.core.downloads.enqueue_download,
+                target["user"],
+                target["filename"],
+            )
+        except Exception as error:
+            self.log(f"vcsearch (socket): download failed: {error!r}")
+            return {"error": "download_failed"}
+
+        self.log(
+            "vcsearch (socket): queued download from {user}: {filename}".format(
+                user=_sanitize_for_log(target["user"]),
+                filename=_sanitize_for_log(target["filename"]),
+            )
+        )
+
+        return {"status": "queued", "filename": target["filename"]}
+
     def _handle_request(self, request):
         try:
             return self._dispatch_request(request)
@@ -216,5 +277,11 @@ class Plugin(BasePlugin):
 
         if action == "search":
             return self._handle_search(request.get("query", ""))
+
+        if action == "list_results":
+            return {"results": self._last_results}
+
+        if action == "download":
+            return self._handle_download(request)
 
         return {"error": "unknown_action"}
