@@ -1,3 +1,6 @@
+import os
+
+from control_socket import ControlSocketServer
 from pynicotine.events import events
 from pynicotine.pluginsystem import BasePlugin
 from pynicotine.slskmessages import FileAttribute
@@ -25,12 +28,21 @@ class Plugin(BasePlugin):
 
         self._active_token = None
         self._collected_results = []
+        self._control_socket = None
 
     def init(self):
         events.connect("file-search-response", self._file_search_response)
 
+        socket_path = os.path.join(self.path, "control.sock")
+        self._control_socket = ControlSocketServer(socket_path, self._handle_request)
+        self._control_socket.start()
+
     def disable(self):
         events.disconnect("file-search-response", self._file_search_response)
+
+        if self._control_socket is not None:
+            self._control_socket.stop()
+            self._control_socket = None
 
     def vcsearch_command(self, args, **_unused):
         query = args.strip()
@@ -77,3 +89,6 @@ class Plugin(BasePlugin):
         finally:
             self._active_token = None
             self._collected_results = []
+
+    def _handle_request(self, request):
+        return {"echo": request}
