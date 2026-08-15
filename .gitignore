@@ -1,2 +1,3 @@
 __pycache__/
 *.pyc
+nicotine_plugin/voice_control/control.sock

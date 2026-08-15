@@ -1,13 +1,43 @@
+import os
+import threading
+import time
+
+from control_socket import ControlSocketServer
 from pynicotine.events import events
 from pynicotine.pluginsystem import BasePlugin
 from pynicotine.slskmessages import FileAttribute
 
 SEARCH_COLLECTION_SECONDS = 5
 MAX_LOGGED_RESULTS = 10
+MAX_RETURNED_RESULTS = 10
+MAIN_THREAD_CALL_TIMEOUT = 10
+LOSSLESS_FORMATS = frozenset({"flac", "wav", "ape", "wv"})
 
 
 def _sanitize_for_log(value):
     return value.encode("unicode_escape").decode("ascii")
+
+
+def _file_format(filename):
+    return os.path.splitext(filename)[1].lstrip(".").lower()
+
+
+def _quality_score(result):
+    file_format = _file_format(result["filename"])
+
+    if file_format in LOSSLESS_FORMATS:
+        return float("inf")
+
+    return result["bitrate"] or 0
+
+
+def _rank_key(result):
+    return (
+        0 if result["free_slot"] else 1,
+        -_quality_score(result),
+        -(result["speed"] or 0),
+        result["queue_length"] or 0,
+    )
 
 
 class Plugin(BasePlugin):
@@ -25,12 +55,50 @@ class Plugin(BasePlugin):
 
         self._active_token = None
         self._collected_results = []
+        self._last_results = []
+        self._control_socket = None
+        self._search_lock = threading.Lock()
 
     def init(self):
         events.connect("file-search-response", self._file_search_response)
 
+        socket_path = os.path.join(self.path, "control.sock")
+        self._control_socket = ControlSocketServer(socket_path, self._handle_request)
+        self._control_socket.start()
+
     def disable(self):
         events.disconnect("file-search-response", self._file_search_response)
+
+        if self._control_socket is not None:
+            self._control_socket.stop()
+            self._control_socket = None
+
+    def _run_on_main_thread(self, func, *args, **kwargs):
+        done = threading.Event()
+        cancelled = threading.Event()
+        result_box = {}
+
+        def _call():
+            if cancelled.is_set():
+                return
+
+            try:
+                result_box["value"] = func(*args, **kwargs)
+            except Exception as error:
+                result_box["error"] = error
+            finally:
+                done.set()
+
+        events.invoke_main_thread(_call)
+
+        if not done.wait(timeout=MAIN_THREAD_CALL_TIMEOUT):
+            cancelled.set()
+            raise TimeoutError("main-thread call did not complete")
+
+        if "error" in result_box:
+            raise result_box["error"]
+
+        return result_box.get("value")
 
     def vcsearch_command(self, args, **_unused):
         query = args.strip()
@@ -39,15 +107,23 @@ class Plugin(BasePlugin):
             self.output("Usage: /vcsearch <query>")
             return False
 
-        self._collected_results = []
-        self.core.search.do_search(query, "global")
-        self._active_token = self.core.search.token
+        if not self._search_lock.acquire(blocking=False):
+            self.output("vcsearch: a search is already in progress, try again shortly")
+            return False
 
-        self.log(f"vcsearch: searching for '{query}' (token {self._active_token})")
+        try:
+            token = self._start_search(query)
 
-        events.schedule(delay=SEARCH_COLLECTION_SECONDS, callback=self._log_collected_results)
+            self.log(f"vcsearch: searching for '{_sanitize_for_log(query)}' (token {token})")
 
-        return True
+            events.schedule(delay=SEARCH_COLLECTION_SECONDS, callback=self._log_collected_results)
+
+            return True
+        except Exception:
+            self._active_token = None
+            self._collected_results = []
+            self._search_lock.release()
+            raise
 
     def _file_search_response(self, msg):
         if msg.token != self._active_token:
@@ -55,11 +131,13 @@ class Plugin(BasePlugin):
 
         for _code, filename, size, _ext, attrs in msg.list:
             self._collected_results.append({
-                "user": _sanitize_for_log(msg.username),
-                "filename": _sanitize_for_log(filename),
+                "user": msg.username,
+                "filename": filename,
                 "size": size,
                 "bitrate": attrs.get(FileAttribute.BITRATE) if attrs else None,
                 "speed": msg.ulspeed,
+                "free_slot": msg.freeulslots,
+                "queue_length": msg.inqueue,
             })
 
     def _log_collected_results(self):
@@ -70,10 +148,153 @@ class Plugin(BasePlugin):
             for result in self._collected_results[:MAX_LOGGED_RESULTS]:
                 self.log(
                     "vcsearch:   {user} - {filename} "
-                    "({size} bytes, bitrate={bitrate}, speed={speed})".format(**result)
+                    "({size} bytes, bitrate={bitrate}, speed={speed})".format(
+                        user=_sanitize_for_log(result["user"]),
+                        filename=_sanitize_for_log(result["filename"]),
+                        size=result["size"],
+                        bitrate=result["bitrate"],
+                        speed=result["speed"],
+                    )
                 )
         except Exception as error:
             self.log(f"vcsearch: failed to log results: {error!r}")
         finally:
             self._active_token = None
             self._collected_results = []
+            self._search_lock.release()
+
+    def _start_search(self, query):
+        self._collected_results = []
+        self.core.search.do_search(query, "global")
+        self._active_token = self.core.search.token
+        return self._active_token
+
+    def _finish_search(self):
+        results = list(self._collected_results)
+        self._active_token = None
+        self._collected_results = []
+        return results
+
+    def _handle_search(self, query):
+        if not query:
+            return {"error": "empty_query"}
+
+        if not self._search_lock.acquire(blocking=False):
+            return {"error": "search_in_progress"}
+
+        try:
+            token = self._run_on_main_thread(self._start_search, query)
+            self.log(f"vcsearch (socket): searching for '{_sanitize_for_log(query)}' (token {token})")
+
+            time.sleep(SEARCH_COLLECTION_SECONDS)
+
+            results = self._run_on_main_thread(self._finish_search)
+            ranked = sorted(results, key=_rank_key)[:MAX_RETURNED_RESULTS]
+
+            self._last_results = [
+                {
+                    "index": position,
+                    "filename": result["filename"],
+                    "user": result["user"],
+                    "size": result["size"],
+                    "format": _file_format(result["filename"]),
+                    "bitrate": result["bitrate"],
+                    "speed": result["speed"],
+                }
+                for position, result in enumerate(ranked, start=1)
+            ]
+
+            self.log(f"vcsearch (socket): token {token} returning {len(self._last_results)} result(s)")
+
+            return {"results": self._last_results}
+        except Exception:
+            self._active_token = None
+            self._collected_results = []
+            raise
+        finally:
+            self._search_lock.release()
+
+    def _resolve_download_target(self, request):
+        if "index" in request:
+            index = request["index"]
+
+            for result in self._last_results:
+                if result["index"] == index:
+                    return result
+
+            return None
+
+        if "match" in request:
+            needle = request["match"].strip().lower()
+            matches = [
+                result for result in self._last_results
+                if needle in result["filename"].lower()
+            ]
+
+            if len(matches) != 1:
+                return None
+
+            return matches[0]
+
+        return None
+
+    def _download_error_reason(self, request):
+        if not self._last_results:
+            return "no_active_results"
+
+        if "index" in request:
+            return "index_out_of_range"
+
+        if "match" in request:
+            return "ambiguous_match"
+
+        return "missing_index_or_match"
+
+    def _handle_download(self, request):
+        target = self._resolve_download_target(request)
+
+        if target is None:
+            return {"error": self._download_error_reason(request)}
+
+        try:
+            self._run_on_main_thread(
+                self.core.downloads.enqueue_download,
+                target["user"],
+                target["filename"],
+            )
+        except Exception as error:
+            self.log(f"vcsearch (socket): download failed: {error!r}")
+            return {"error": "download_failed"}
+
+        try:
+            self.log(
+                "vcsearch (socket): queued download from {user}: {filename}".format(
+                    user=_sanitize_for_log(target["user"]),
+                    filename=_sanitize_for_log(target["filename"]),
+                )
+            )
+        except Exception:
+            pass
+
+        return {"status": "queued", "filename": target["filename"]}
+
+    def _handle_request(self, request):
+        try:
+            return self._dispatch_request(request)
+        except Exception as error:
+            self.log(f"vcsearch (socket): request failed: {error!r}")
+            return {"error": "internal_error"}
+
+    def _dispatch_request(self, request):
+        action = request.get("action")
+
+        if action == "search":
+            return self._handle_search(request.get("query", ""))
+
+        if action == "list_results":
+            return {"results": self._last_results}
+
+        if action == "download":
+            return self._handle_download(request)
+
+        return {"error": "unknown_action"}
