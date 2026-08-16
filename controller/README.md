@@ -5,6 +5,13 @@ plugin over its Unix socket and prints the JSON response. No Nicotine+
 imports — this can run from any Python 3 interpreter as long as Nicotine+ is
 running with the plugin enabled.
 
+## Setup
+
+Create and activate this controller's own virtualenv, then install its
+(currently stdlib-only) requirements:
+
+    python3 -m venv controller/.venv && source controller/.venv/bin/activate && pip install -r controller/requirements.txt
+
 ## Usage
 
     python3 controller/controller.py search "Blue Monday New Order"

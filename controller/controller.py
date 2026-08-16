@@ -9,8 +9,14 @@ DEFAULT_SOCKET_PATH = os.path.expanduser(
     "~/.local/share/nicotine/plugins/voice_control/control.sock"
 )
 
+# The plugin server does a single-threaded accept loop with a
+# SEARCH_COLLECTION_SECONDS (~5s) sleep inside its search handler, plus up to
+# two ~10s main-thread-call waits (~30s worst case). 45s gives comfortable
+# headroom above that real ceiling.
+DEFAULT_TIMEOUT_SECONDS = 45
 
-def build_request(args):
+
+def build_request(args: argparse.Namespace) -> dict:
     if args.action == "search":
         return {"action": "search", "query": args.query}
 
@@ -26,12 +32,21 @@ def build_request(args):
     raise ValueError(f"unknown action: {args.action!r}")
 
 
-def send_request(request, socket_path):
+def send_request(
+    request: dict, socket_path: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
+) -> dict:
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
             sock.connect(socket_path)
             sock.sendall(json.dumps(request).encode("utf-8") + b"\n")
-            response_line = sock.makefile("r").readline()
+            with sock.makefile("r", encoding="utf-8") as stream:
+                response_line = stream.readline()
+    except TimeoutError as error:
+        raise ConnectionError(
+            f"no response from voice_control socket at {socket_path!r} "
+            f"within {timeout}s"
+        ) from error
     except OSError as error:
         raise ConnectionError(
             f"could not reach voice_control socket at {socket_path!r} "
@@ -44,7 +59,13 @@ def send_request(request, socket_path):
             "without sending a response"
         )
 
-    return json.loads(response_line)
+    try:
+        return json.loads(response_line)
+    except json.JSONDecodeError as error:
+        raise ConnectionError(
+            f"voice_control socket at {socket_path!r} sent a malformed "
+            f"response line: {response_line!r}"
+        ) from error
 
 
 def build_parser():
@@ -56,6 +77,15 @@ def build_parser():
         "--socket-path",
         default=DEFAULT_SOCKET_PATH,
         help=f"path to control.sock (default: {DEFAULT_SOCKET_PATH})",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=(
+            "seconds to wait for a response before giving up "
+            f"(default: {DEFAULT_TIMEOUT_SECONDS})"
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -85,7 +115,7 @@ def main(argv=None):
     request = build_request(args)
 
     try:
-        response = send_request(request, args.socket_path)
+        response = send_request(request, args.socket_path, timeout=args.timeout)
     except ConnectionError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
