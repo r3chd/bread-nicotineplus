@@ -12,7 +12,18 @@ from argparse import Namespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from controller import build_parser, build_request, main, send_request
+import numpy as np
+from unittest.mock import MagicMock, patch
+
+from controller import (
+    DEFAULT_WHISPER_MODEL,
+    build_parser,
+    build_request,
+    main,
+    record_audio,
+    send_request,
+    transcribe_audio,
+)
 
 
 class TestBuildRequest(unittest.TestCase):
@@ -182,6 +193,85 @@ class TestMain(unittest.TestCase):
         output = stderr.getvalue()
         self.assertIn("error:", output)
         self.assertNotIn("Traceback", output)
+
+
+class TestRecordAudio(unittest.TestCase):
+
+    def test_concatenates_callback_chunks_in_order(self):
+        captured = {}
+
+        class FakeInputStream:
+            def __init__(self, samplerate, channels, dtype, callback):
+                captured["callback"] = callback
+
+            def __enter__(self):
+                captured["callback"](
+                    np.array([[0.1], [0.2]], dtype="float32"), 2, None, None
+                )
+                captured["callback"](np.array([[0.3]], dtype="float32"), 1, None, None)
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with patch("controller.sd.InputStream", side_effect=FakeInputStream), patch(
+            "builtins.input", return_value=""
+        ):
+            audio = record_audio(sample_rate=16000)
+
+        np.testing.assert_allclose(audio, np.array([0.1, 0.2, 0.3], dtype="float32"))
+
+    def test_no_audio_captured_returns_empty_array(self):
+        class EmptyInputStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        with patch("controller.sd.InputStream", side_effect=EmptyInputStream), patch(
+            "builtins.input", return_value=""
+        ):
+            audio = record_audio(sample_rate=16000)
+
+        self.assertEqual(audio.shape, (0,))
+
+
+class TestTranscribeAudio(unittest.TestCase):
+
+    def test_empty_audio_returns_empty_string_without_calling_model(self):
+        model = MagicMock()
+
+        result = transcribe_audio(np.zeros(0, dtype="float32"), model)
+
+        self.assertEqual(result, "")
+        model.transcribe.assert_not_called()
+
+    def test_joins_and_strips_segment_texts(self):
+        model = MagicMock()
+        segment_one = MagicMock(text=" search blue monday ")
+        segment_two = MagicMock(text="new order ")
+        model.transcribe.return_value = ([segment_one, segment_two], MagicMock())
+
+        result = transcribe_audio(np.ones(10, dtype="float32"), model)
+
+        self.assertEqual(result, "search blue monday new order")
+
+
+class TestLoadWhisperModel(unittest.TestCase):
+
+    def test_constructs_whisper_model_for_cpu(self):
+        with patch("controller.WhisperModel") as mock_whisper_model:
+            from controller import load_whisper_model
+
+            load_whisper_model(DEFAULT_WHISPER_MODEL)
+
+        mock_whisper_model.assert_called_once_with(
+            DEFAULT_WHISPER_MODEL, device="cpu", compute_type="int8"
+        )
 
 
 if __name__ == "__main__":

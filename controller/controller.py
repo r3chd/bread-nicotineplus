@@ -4,6 +4,10 @@ import os
 import socket
 import sys
 
+import numpy as np
+import sounddevice as sd
+from faster_whisper import WhisperModel
+
 
 DEFAULT_SOCKET_PATH = os.path.expanduser(
     "~/.local/share/nicotine/plugins/voice_control/control.sock"
@@ -14,6 +18,9 @@ DEFAULT_SOCKET_PATH = os.path.expanduser(
 # two ~10s main-thread-call waits (~30s worst case). 45s gives comfortable
 # headroom above that real ceiling.
 DEFAULT_TIMEOUT_SECONDS = 45
+
+SAMPLE_RATE = 16000  # Whisper's native sample rate; sounddevice records at this rate directly
+DEFAULT_WHISPER_MODEL = "base"
 
 
 def build_request(args: argparse.Namespace) -> dict:
@@ -30,6 +37,36 @@ def build_request(args: argparse.Namespace) -> dict:
         return {"action": "list_results"}
 
     raise ValueError(f"unknown action: {args.action!r}")
+
+
+def record_audio(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    frames = []
+
+    def callback(indata, frames_count, time, status):
+        frames.append(indata.copy())
+
+    print("Recording... press Enter to stop.")
+    with sd.InputStream(
+        samplerate=sample_rate, channels=1, dtype="float32", callback=callback
+    ):
+        input()
+
+    if not frames:
+        return np.zeros(0, dtype="float32")
+
+    return np.concatenate(frames)[:, 0]
+
+
+def transcribe_audio(audio: np.ndarray, model: WhisperModel) -> str:
+    if audio.size == 0:
+        return ""
+
+    segments, _ = model.transcribe(audio)
+    return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+def load_whisper_model(model_size: str) -> WhisperModel:
+    return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
 def send_request(
