@@ -1,9 +1,10 @@
 # voice_control Controller (text-mode skeleton)
 
 Standalone CLI that sends one command to the running `voice_control` Nicotine+
-plugin over its Unix socket and prints the JSON response. No Nicotine+
-imports — this can run from any Python 3 interpreter as long as Nicotine+ is
-running with the plugin enabled.
+plugin over its Unix socket and prints the JSON response, plus an LLM
+tool-calling layer (`tool_calling.py`) that resolves a raw transcript into
+one of those commands. No Nicotine+ imports — this can run from any Python 3
+interpreter as long as Nicotine+ is running with the plugin enabled.
 
 ## Setup
 

@@ -1,8 +1,13 @@
 import json
 
-import anthropic
-
 DEFAULT_MODEL = "claude-haiku-4-5"
+
+# A single forced tool-call request with max_tokens=1024 and no streaming.
+# 30s is generous headroom over typical Haiku 4.5 latency for this shape of
+# call, while still failing fast instead of hanging for the SDK's 10-minute
+# default when this module is later driven by an interactive push-to-talk
+# loop.
+DEFAULT_TIMEOUT_SECONDS = 30
 
 SEARCH_TOOL = {
     "name": "search",
@@ -92,13 +97,24 @@ def _format_last_results(last_results: list) -> str:
     if not last_results:
         return "No search results yet."
 
-    return json.dumps(last_results, indent=2)
+    return json.dumps(last_results, indent=2, ensure_ascii=False)
 
 
 def resolve_transcript(transcript: str, last_results: list, client=None) -> dict:
     if client is None:
-        client = anthropic.Anthropic()
+        import anthropic
 
+        client = anthropic.Anthropic(timeout=DEFAULT_TIMEOUT_SECONDS)
+
+    # last_results comes straight from the plugin's search results and is
+    # interpolated verbatim below, so a crafted filename/username could
+    # embed text that looks like an instruction to Claude. This is
+    # contained: the plugin never trusts LLM-echoed filenames/usernames
+    # when actually resolving a download - it always resolves index/match
+    # against its own server-side _last_results. Don't start passing
+    # LLM-echoed values from here into anything that touches the
+    # filesystem or the network without re-validating against that
+    # server-side state first.
     message_content = (
         f"Most recent search results:\n{_format_last_results(last_results)}\n\n"
         f"User command: {transcript}"
@@ -109,7 +125,7 @@ def resolve_transcript(transcript: str, last_results: list, client=None) -> dict
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         tools=TOOLS,
-        tool_choice={"type": "any"},
+        tool_choice={"type": "any", "disable_parallel_tool_use": True},
         messages=[{"role": "user", "content": message_content}],
     )
 

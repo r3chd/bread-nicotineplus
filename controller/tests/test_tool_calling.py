@@ -73,7 +73,10 @@ class TestResolveTranscript(unittest.TestCase):
 
         _, kwargs = client.messages.create.call_args
         self.assertEqual(kwargs["model"], DEFAULT_MODEL)
-        self.assertEqual(kwargs["tool_choice"], {"type": "any"})
+        self.assertEqual(
+            kwargs["tool_choice"],
+            {"type": "any", "disable_parallel_tool_use": True},
+        )
         tool_names = {tool["name"] for tool in kwargs["tools"]}
         self.assertEqual(tool_names, {"search", "download", "list_results"})
 
