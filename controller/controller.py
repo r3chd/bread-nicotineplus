@@ -4,6 +4,10 @@ import os
 import socket
 import sys
 
+import numpy as np
+import sounddevice as sd
+from faster_whisper import WhisperModel
+
 
 DEFAULT_SOCKET_PATH = os.path.expanduser(
     "~/.local/share/nicotine/plugins/voice_control/control.sock"
@@ -14,6 +18,9 @@ DEFAULT_SOCKET_PATH = os.path.expanduser(
 # two ~10s main-thread-call waits (~30s worst case). 45s gives comfortable
 # headroom above that real ceiling.
 DEFAULT_TIMEOUT_SECONDS = 45
+
+SAMPLE_RATE = 16000  # Whisper's native sample rate; sounddevice records at this rate directly
+DEFAULT_WHISPER_MODEL = "base"
 
 
 def build_request(args: argparse.Namespace) -> dict:
@@ -30,6 +37,36 @@ def build_request(args: argparse.Namespace) -> dict:
         return {"action": "list_results"}
 
     raise ValueError(f"unknown action: {args.action!r}")
+
+
+def record_audio(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    frames = []
+
+    def callback(indata, frames_count, time, status):
+        frames.append(indata.copy())
+
+    print("Recording... press Enter to stop.")
+    with sd.InputStream(
+        samplerate=sample_rate, channels=1, dtype="float32", callback=callback
+    ):
+        input()
+
+    if not frames:
+        return np.zeros(0, dtype="float32")
+
+    return np.concatenate(frames)[:, 0]
+
+
+def transcribe_audio(audio: np.ndarray, model: WhisperModel) -> str:
+    if audio.size == 0:
+        return ""
+
+    segments, _ = model.transcribe(audio)
+    return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+def load_whisper_model(model_size: str) -> WhisperModel:
+    return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
 def send_request(
@@ -66,6 +103,36 @@ def send_request(
             f"voice_control socket at {socket_path!r} sent a malformed "
             f"response line: {response_line!r}"
         ) from error
+
+
+def run_listen_loop(socket_path: str, timeout: float, model: WhisperModel) -> int:
+    print("Voice control listening. Press Enter to start recording, Ctrl+C to exit.")
+    while True:
+        try:
+            input()
+            audio = record_audio()
+            transcript = transcribe_audio(audio, model)
+        except KeyboardInterrupt:
+            print("\nExiting listen mode.")
+            return 0
+        except Exception as error:
+            print(f"error: {error}", file=sys.stderr)
+            continue
+
+        if not transcript:
+            print("no speech detected, try again")
+            continue
+
+        print(f"heard: {transcript}")
+        request = {"action": "search", "query": transcript}
+
+        try:
+            response = send_request(request, socket_path, timeout=timeout)
+        except ConnectionError as error:
+            print(f"error: {error}", file=sys.stderr)
+            continue
+
+        print(json.dumps(response, indent=2))
 
 
 def build_parser():
@@ -106,12 +173,33 @@ def build_parser():
 
     subparsers.add_parser("list_results", help="replay the last search results")
 
+    listen_parser = subparsers.add_parser(
+        "listen", help="push-to-talk voice input (Enter to start/stop recording)"
+    )
+    listen_parser.add_argument(
+        "--whisper-model",
+        default=DEFAULT_WHISPER_MODEL,
+        help=f"faster-whisper model size (default: {DEFAULT_WHISPER_MODEL})",
+    )
+
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.action == "listen":
+        try:
+            model = load_whisper_model(args.whisper_model)
+            return run_listen_loop(args.socket_path, args.timeout, model)
+        except KeyboardInterrupt:
+            print("\nExiting listen mode.")
+            return 0
+        except Exception as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+
     request = build_request(args)
 
     try:
