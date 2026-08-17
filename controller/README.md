@@ -19,6 +19,12 @@ Create and activate this controller's own virtualenv, then install its
     python3 controller/controller.py download --index 1
     python3 controller/controller.py download --match "blue monday"
 
+Push-to-talk voice input (press Enter to start recording, Enter again to
+stop; sends the transcript as a search; Ctrl+C to exit):
+
+    python3 controller/controller.py listen
+    python3 controller/controller.py listen --whisper-model small
+
 Custom socket path (default is
 `~/.local/share/nicotine/plugins/voice_control/control.sock`):
 

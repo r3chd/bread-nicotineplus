@@ -105,6 +105,33 @@ def send_request(
         ) from error
 
 
+def run_listen_loop(socket_path: str, timeout: float, model: WhisperModel) -> int:
+    print("Voice control listening. Press Enter to start recording, Ctrl+C to exit.")
+    while True:
+        try:
+            input()
+            audio = record_audio()
+            transcript = transcribe_audio(audio, model)
+        except KeyboardInterrupt:
+            print("\nExiting listen mode.")
+            return 0
+
+        if not transcript:
+            print("no speech detected, try again")
+            continue
+
+        print(f"heard: {transcript}")
+        request = {"action": "search", "query": transcript}
+
+        try:
+            response = send_request(request, socket_path, timeout=timeout)
+        except ConnectionError as error:
+            print(f"error: {error}", file=sys.stderr)
+            continue
+
+        print(json.dumps(response, indent=2))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="controller.py",
@@ -143,12 +170,30 @@ def build_parser():
 
     subparsers.add_parser("list_results", help="replay the last search results")
 
+    listen_parser = subparsers.add_parser(
+        "listen", help="push-to-talk voice input (Enter to start/stop recording)"
+    )
+    listen_parser.add_argument(
+        "--whisper-model",
+        default=DEFAULT_WHISPER_MODEL,
+        help=f"faster-whisper model size (default: {DEFAULT_WHISPER_MODEL})",
+    )
+
     return parser
 
 
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.action == "listen":
+        try:
+            model = load_whisper_model(args.whisper_model)
+            return run_listen_loop(args.socket_path, args.timeout, model)
+        except Exception as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+
     request = build_request(args)
 
     try:
