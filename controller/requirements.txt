@@ -1,0 +1,2 @@
+# Stdlib-only for the text-mode controller skeleton (build-order step 3).
+# faster-whisper / anthropic will be added here in step 4/5.
