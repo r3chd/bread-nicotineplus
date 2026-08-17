@@ -349,6 +349,32 @@ class TestRunListenLoop(unittest.TestCase):
         exit_code = run_listen_loop("/tmp/x.sock", 45, MagicMock())
         self.assertEqual(exit_code, 0)
 
+    @patch("controller.send_request")
+    @patch("controller.transcribe_audio")
+    @patch("controller.record_audio")
+    @patch("builtins.input")
+    def test_mic_error_does_not_end_the_loop(
+        self, mock_input, mock_record, mock_transcribe, mock_send
+    ):
+        mock_input.side_effect = [None, None, KeyboardInterrupt]
+        mock_record.side_effect = [
+            RuntimeError("mic unavailable"),
+            np.ones(10, dtype="float32"),
+        ]
+        mock_transcribe.return_value = "blue monday"
+        mock_send.return_value = {"results": []}
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = run_listen_loop("/tmp/x.sock", 45, MagicMock())
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("mic unavailable", stderr.getvalue())
+        self.assertEqual(mock_record.call_count, 2)
+        mock_send.assert_called_once_with(
+            {"action": "search", "query": "blue monday"}, "/tmp/x.sock", timeout=45
+        )
+
 
 class TestMainListen(unittest.TestCase):
 
@@ -373,6 +399,15 @@ class TestMainListen(unittest.TestCase):
     def test_main_listen_model_load_failure_returns_1_not_a_traceback(self, mock_load):
         exit_code = main(["listen"])
         self.assertEqual(exit_code, 1)
+
+    @patch("controller.load_whisper_model", side_effect=KeyboardInterrupt)
+    def test_main_listen_ctrl_c_during_model_load_exits_cleanly(self, mock_load):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            exit_code = main(["listen"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("Traceback", stderr.getvalue())
 
 
 if __name__ == "__main__":

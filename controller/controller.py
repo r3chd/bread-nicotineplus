@@ -115,6 +115,9 @@ def run_listen_loop(socket_path: str, timeout: float, model: WhisperModel) -> in
         except KeyboardInterrupt:
             print("\nExiting listen mode.")
             return 0
+        except Exception as error:
+            print(f"error: {error}", file=sys.stderr)
+            continue
 
         if not transcript:
             print("no speech detected, try again")
@@ -190,6 +193,9 @@ def main(argv=None):
         try:
             model = load_whisper_model(args.whisper_model)
             return run_listen_loop(args.socket_path, args.timeout, model)
+        except KeyboardInterrupt:
+            print("\nExiting listen mode.")
+            return 0
         except Exception as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
